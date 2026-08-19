@@ -13,6 +13,12 @@ A sanitized Terraform reference implementation for secure Azure platform foundat
 - Private Endpoint and Private DNS integration for Blob Storage
 - Typed variables, outputs and a synthetic environment example
 
+## Technical case studies
+
+Alongside the Terraform patterns, this repository includes sanitized write-ups from hands-on Azure troubleshooting and platform work:
+
+- [Azure App Service custom container: trusting a private CA without rebuilding the image](docs/app-service-custom-container-ca-trust.md) — certificate injection with `WEBSITE_LOAD_CERTIFICATES`, DER-to-PEM conversion, Node.js `NODE_EXTRA_CA_CERTS`, startup-command troubleshooting and runtime validation.
+
 ## Architecture
 
 ```mermaid
@@ -47,7 +53,8 @@ flowchart LR
 ├── private-storage.tf
 ├── outputs.tf
 ├── examples/dev.tfvars
-└── docs/architecture.md
+├── docs/architecture.md
+└── docs/app-service-custom-container-ca-trust.md
 ```
 
 ## Quick start
