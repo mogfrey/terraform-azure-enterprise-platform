@@ -1,0 +1,93 @@
+// Sanitized reference pattern: P2 / major Azure control-plane changes.
+// Replace placeholder IDs and tune selectors for your environment.
+
+let RuleInterval = 5m;
+let MaxIngestionDelay = 20m;
+let FreshIngestionWindow = 15m;
+let ProductionSubscriptions = dynamic([
+    "00000000-0000-0000-0000-000000000000"
+]);
+let PimCallerObjectId = "<pim-service-principal-object-id>";
+
+// Best-effort PIM enrichment keyed on the exact RBAC role-assignment resource ID.
+let PIMAudit =
+    AuditLogs
+    | where TimeGenerated >= ago(RuleInterval + MaxIngestionDelay + 10m)
+    | where Result =~ "success"
+    | where OperationName has "PIM"
+    | mv-expand Detail = todynamic(AdditionalDetails)
+    | where tostring(Detail.key) in ("OriginRoleAssignmentId", "RoleAssignmentRequestId")
+    | extend PIMRoleAssignmentId = tolower(tostring(Detail.value))
+    | mv-expand Target = todynamic(TargetResources)
+    | where tostring(Target.type) =~ "User"
+    | extend
+        PIMAffectedPrincipalId = tostring(Target.id),
+        PIMAffectedUPN = tostring(Target.userPrincipalName),
+        PIMAuditOperation = OperationName,
+        PIMAuditTime = TimeGenerated
+    | summarize arg_max(PIMAuditTime, PIMAffectedUPN, PIMAffectedPrincipalId, PIMAuditOperation)
+        by PIMRoleAssignmentId;
+
+AzureActivity
+| where TimeGenerated >= ago(MaxIngestionDelay + FreshIngestionWindow)
+| where ingestion_time() > ago(FreshIngestionWindow)
+| where SubscriptionId in (ProductionSubscriptions)
+| where CategoryValue =~ "Administrative"
+| where ActivityStatusValue in~ ("Success", "Succeeded")
+| extend Op = tolower(OperationNameValue)
+| where
+       Op startswith "microsoft.authorization/roleassignments/"
+    or Op startswith "microsoft.authorization/roledefinitions/"
+    or Op startswith "microsoft.authorization/policyassignments/"
+    or Op startswith "microsoft.authorization/locks/"
+    or Op startswith "microsoft.insights/diagnosticsettings/"
+    or Op startswith "microsoft.insights/actiongroups/"
+    or Op startswith "microsoft.web/sites/config/"
+    or Op startswith "microsoft.keyvault/vaults/"
+    or Op startswith "microsoft.storage/storageaccounts/"
+    or Op startswith "microsoft.managedidentity/userassignedidentities/"
+    or Op == "microsoft.resources/subscriptions/resourcegroups/write"
+| extend EventHash = hash_sha256(tostring(pack_all()))
+| summarize arg_max(TimeGenerated, *) by EventHash
+| extend ActivityRoleAssignmentId = iff(
+    Caller == PimCallerObjectId and Op startswith "microsoft.authorization/roleassignments/",
+    tolower(coalesce(_ResourceId, ResourceId)),
+    ""
+)
+| join kind=leftouter PIMAudit on $left.ActivityRoleAssignmentId == $right.PIMRoleAssignmentId
+| extend
+    RawCaller = Caller,
+    AlertCaller = case(
+        Caller == PimCallerObjectId and PIMAuditOperation has "timebound", "Microsoft PIM (automatic expiry)",
+        Caller == PimCallerObjectId, "Microsoft PIM",
+        isempty(Caller), "Unknown caller",
+        Caller
+    ),
+    SourceIP = iff(isempty(CallerIpAddress), "Unknown", CallerIpAddress),
+    ImpactedResourceGroup = iff(isempty(ResourceGroup), "Subscription scope", ResourceGroup),
+    ImpactedSubscription = SubscriptionId,
+    RawOperation = OperationNameValue,
+    TargetResourceId = coalesce(_ResourceId, ResourceId)
+| extend Operation = case(
+    Caller == PimCallerObjectId and Op endswith "/roleassignments/delete" and PIMAuditOperation has "timebound" and isnotempty(PIMAffectedUPN),
+        strcat("PIM role assignment expired for ", PIMAffectedUPN),
+    Op startswith "microsoft.authorization/roleassignments/" and Op endswith "/write", "Role assignment created or updated",
+    Op startswith "microsoft.authorization/roleassignments/" and Op endswith "/delete", "Role assignment removed",
+    Op startswith "microsoft.authorization/policyassignments/", "Azure Policy assignment changed",
+    Op startswith "microsoft.authorization/locks/", "Resource lock changed",
+    Op startswith "microsoft.insights/diagnosticsettings/", "Diagnostic settings changed",
+    Op startswith "microsoft.web/sites/config/", "Application configuration changed",
+    Op == "microsoft.resources/subscriptions/resourcegroups/write", "Resource Group created or updated",
+    "Major production control-plane change"
+)
+| project
+    TimeGenerated,
+    AlertCaller,
+    SourceIP,
+    Operation,
+    ImpactedResourceGroup,
+    ImpactedSubscription,
+    RawOperation,
+    TargetResourceId,
+    CorrelationId,
+    RawCaller
