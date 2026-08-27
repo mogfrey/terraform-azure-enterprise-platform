@@ -18,6 +18,7 @@ A sanitized Terraform reference implementation for secure Azure platform foundat
 Alongside the Terraform patterns, this repository includes sanitized write-ups from hands-on Azure troubleshooting and platform work:
 
 - [Azure App Service custom container: trusting a private CA without rebuilding the image](docs/app-service-custom-container-ca-trust.md) — certificate injection with `WEBSITE_LOAD_CERTIFICATES`, DER-to-PEM conversion, Node.js `NODE_EXTRA_CA_CERTS`, startup-command troubleshooting and runtime validation.
+- [Azure production change monitoring and alerting](docs/production-change-monitoring.md) — centralized Activity Log monitoring with Log Analytics, P1/P2 scheduled-query rules, KQL ingestion-delay hardening, PIM enrichment, Action Groups, Logic Apps, formatted severity notifications and production-safe end-to-end validation. Sanitized reference KQL is included under [`examples/production-change-monitoring/`](examples/production-change-monitoring/).
 
 ## Architecture
 
@@ -52,9 +53,15 @@ flowchart LR
 ├── monitoring.tf
 ├── private-storage.tf
 ├── outputs.tf
-├── examples/dev.tfvars
-├── docs/architecture.md
-└── docs/app-service-custom-container-ca-trust.md
+├── examples/
+│   ├── dev.tfvars
+│   └── production-change-monitoring/
+│       ├── p1-critical.kql
+│       └── p2-major.kql
+└── docs/
+    ├── architecture.md
+    ├── app-service-custom-container-ca-trust.md
+    └── production-change-monitoring.md
 ```
 
 ## Quick start
