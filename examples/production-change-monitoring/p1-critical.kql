@@ -1,0 +1,49 @@
+// Sanitized reference pattern: P1 / critical disruptive Azure control-plane changes.
+// Replace placeholder subscription IDs and tune selectors for your environment.
+
+let RuleInterval = 5m;
+let MaxIngestionDelay = 20m;
+let FreshIngestionWindow = 15m;
+let ProductionSubscriptions = dynamic([
+    "00000000-0000-0000-0000-000000000000"
+]);
+
+AzureActivity
+| where TimeGenerated >= ago(MaxIngestionDelay + FreshIngestionWindow)
+| where ingestion_time() > ago(FreshIngestionWindow)
+| where SubscriptionId in (ProductionSubscriptions)
+| where CategoryValue =~ "Administrative"
+| where ActivityStatusValue in~ ("Success", "Succeeded")
+| extend Op = tolower(OperationNameValue)
+| where
+       Op has_any ("/restart/action", "/stop/action", "/shutdown/action", "/deallocate/action")
+    or (Op endswith "/delete" and Op !startswith "microsoft.authorization/")
+    or (Op startswith "microsoft.network/" and (Op endswith "/write" or Op endswith "/delete"))
+| extend EventHash = hash_sha256(tostring(pack_all()))
+| summarize arg_max(TimeGenerated, *) by EventHash
+| extend
+    AlertCaller = iff(isempty(Caller), "Unknown caller", Caller),
+    SourceIP = iff(isempty(CallerIpAddress), "Unknown", CallerIpAddress),
+    ImpactedResourceGroup = iff(isempty(ResourceGroup), "Subscription scope", ResourceGroup),
+    ImpactedSubscription = SubscriptionId,
+    RawOperation = OperationNameValue,
+    TargetResourceId = coalesce(_ResourceId, ResourceId)
+| extend Operation = case(
+    Op has "/restart/action", "Production resource restarted",
+    Op has_any ("/stop/action", "/shutdown/action"), "Production resource stopped",
+    Op has "/deallocate/action", "Production resource deallocated",
+    Op startswith "microsoft.network/" and Op endswith "/delete", "Production network resource deleted",
+    Op startswith "microsoft.network/" and Op endswith "/write", "Production network configuration changed",
+    Op endswith "/delete", "Production resource deleted",
+    "Critical production control-plane change"
+)
+| project
+    TimeGenerated,
+    AlertCaller,
+    SourceIP,
+    Operation,
+    ImpactedResourceGroup,
+    ImpactedSubscription,
+    RawOperation,
+    TargetResourceId,
+    CorrelationId
